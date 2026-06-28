@@ -1,0 +1,31 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.poc.btn'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.poc.btn'
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName '1.0'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            // Sign the release build with the built-in debug signingConfig.
+            // AGP auto-generates the debug keystore if it is missing, so the
+            // resulting APK is installable without a custom keystore.
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
