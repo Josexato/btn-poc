@@ -100,22 +100,19 @@ public class MainActivity extends Activity implements SensorEventListener {
     // Umbral (m/s^2) para decidir boca arriba / boca abajo por el eje Z.
     private static final float FACE_Z_THRESHOLD = 7.0f;
 
-    // --- Reconocimiento de patrones (secuencias de golpes = piezas) ---
-    //  2 golpes            -> Torre
-    //  3 golpes (uniformes) -> Alfil
-    //  3 golpes (2 rápidos + 1 lento) -> Reina
-    //  4 golpes            -> Caballo
-    // Una ráfaga se cierra cuando pasan BURST_GAP_MS sin nuevos golpes.
-    // Calibrado: gaps dentro de una pieza llegan a ~700ms (Reina lenta), y entre
-    // piezas se pausa ~950ms+, así que 900ms separa piezas seguidas sin partir
-    // una Reina.
-    private static final long BURST_GAP_MS = 900L;
-    // Para la Reina: los 2 primeros golpes van "rápidos" (gap corto) y el 3º
-    // "lento". Análisis histórico (72 ráfagas de 3): el ratio g2/g1 es bimodal
-    // -> Alfil en ~1.0-1.4, valle en 1.4-1.8, Reina con pico en 2.0-2.5. Se
-    // exige que la pausa del 3er golpe sea al menos el DOBLE del primer hueco.
-    private static final long QUEEN_FAST_GAP_MS = 450L;
-    private static final float QUEEN_SLOW_RATIO = 2.0f;
+    // --- Decodificador de símbolos (código de 5 bits: 1=golpe, 0=silencio) ---
+    // Cada símbolo lleva su propio beat: se infiere el beat base (hueco más
+    // corto de la ráfaga) y cada hueco se cuenta como 1 ó 2 beats. El 1er golpe
+    // es el beat 1. Sin metrónomo. AUX1 (10101) no se usa, por eso no hay
+    // ambigüedad "3 rápidos vs 3 lentos".
+    // Un símbolo se cierra tras SYMBOL_END_MS sin golpes (mayor que un hueco de
+    // 2 beats, para no partir el símbolo).
+    private static final long SYMBOL_END_MS = 1400L;
+    // Un hueco cuenta como 2 beats si es >= LONG_BEAT_RATIO * beat base.
+    private static final double LONG_BEAT_RATIO = 1.5;
+
+    // El mensaje son 3 símbolos: pieza -> columna -> fila.
+    private static final int MOVE_LEN = 3;
 
     private TextView pieceView;
     private final long[] burstTimes = new long[16];
@@ -123,7 +120,9 @@ public class MainActivity extends Activity implements SensorEventListener {
     private Handler patternHandler;
     private Runnable finalizeBurst;
     private String lastPiece = "—";
-    private int cRook = 0, cBishop = 0, cKnight = 0, cQueen = 0;
+    // Símbolos acumulados del movimiento en curso.
+    private final String[] moveParts = new String[MOVE_LEN];
+    private int movePos = 0;
 
     // Voz: dice el nombre de la pieza (útil con el teléfono boca abajo).
     private TextToSpeech tts;
@@ -157,7 +156,7 @@ public class MainActivity extends Activity implements SensorEventListener {
         root.setGravity(Gravity.CENTER);
 
         statusView = new TextView(this);
-        statusView.setText("Orientación: ?   Racha: 0");
+        statusView.setText("Orientación: ?   Golpes: 0");
         statusView.setPadding(0, 0, 0, 16);
         statusView.setLayoutParams(new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -258,11 +257,12 @@ public class MainActivity extends Activity implements SensorEventListener {
         magBufSize = 0;
         magBufHead = 0;
         motionEwma = 0f;
-        // Cancelamos cualquier ráfaga en curso.
+        // Cancelamos cualquier símbolo/movimiento en curso.
         if (patternHandler != null) {
             patternHandler.removeCallbacks(finalizeBurst);
         }
         burstLen = 0;
+        movePos = 0;
     }
 
     @Override
@@ -369,65 +369,135 @@ public class MainActivity extends Activity implements SensorEventListener {
         }
     }
 
-    // Añade el golpe a la ráfaga en curso y reprograma el cierre de la ráfaga.
+    // Añade el golpe al símbolo en curso y reprograma el cierre del símbolo.
     private void registerKnockInBurst(long now) {
         if (burstLen < burstTimes.length) {
             burstTimes[burstLen++] = now;
         }
         patternHandler.removeCallbacks(finalizeBurst);
-        patternHandler.postDelayed(finalizeBurst, BURST_GAP_MS);
+        patternHandler.postDelayed(finalizeBurst, SYMBOL_END_MS);
     }
 
-    // Se llama cuando la ráfaga termina (sin golpes durante BURST_GAP_MS).
+    // Se llama cuando el símbolo termina (sin golpes durante SYMBOL_END_MS).
     private void classifyBurst() {
-        String piece = classifyPiece(burstTimes, burstLen);
         int n = burstLen;
         burstLen = 0;
-        if (piece != null) {
-            lastPiece = piece + " (" + n + ")";
-            speak(piece);
-            if (recording) {
-                logRow("PIECE," + piece + "," + n + ",,,,,,,");
+        // Un golpe suelto (accidental) se ignora en silencio.
+        if (n < 2) {
+            updateStatus();
+            return;
+        }
+        String code = decodeCode(burstTimes, n);
+        int number = codeToNumber(code);
+        handleSymbol(number, code, n);
+    }
+
+    // Reconstruye el código de 5 bits a partir de los tiempos de golpe.
+    // Devuelve null si no es un símbolo válido (1 golpe, o cae fuera de 5 beats).
+    private String decodeCode(long[] t, int n) {
+        if (n < 2 || n > 5) return null;
+        long base = Long.MAX_VALUE;
+        for (int i = 1; i < n; i++) {
+            long g = t[i] - t[i - 1];
+            if (g < base) base = g;
+        }
+        if (base <= 0) return null;
+        int[] beat = new int[n];
+        beat[0] = 1;
+        for (int i = 1; i < n; i++) {
+            long g = t[i] - t[i - 1];
+            int b = (g >= base * LONG_BEAT_RATIO) ? 2 : 1;  // hueco de 1 ó 2 beats
+            beat[i] = beat[i - 1] + b;
+        }
+        if (beat[n - 1] > 5) return null;
+        char[] c = {'0', '0', '0', '0', '0'};
+        for (int i = 0; i < n; i++) c[beat[i] - 1] = '1';
+        return new String(c);
+    }
+
+    // Código de 5 bits -> número (0..10), o -1 si no está en la tabla.
+    private int codeToNumber(String code) {
+        if (code == null) return -1;
+        switch (code) {
+            case "00000": return 0;
+            case "10110": return 1;
+            case "11000": return 2;
+            case "10111": return 3;
+            case "11010": return 4;
+            case "11011": return 5;
+            case "11100": return 6;
+            case "11101": return 7;
+            case "11110": return 8;
+            case "10101": return 9;   // AUX1 (no se usa)
+            case "11111": return 10;  // AUX2
+            default: return -1;
+        }
+    }
+
+    // Interpreta el número según su posición: 0=pieza, 1=columna, 2=fila.
+    private String interpretSymbol(int number, int pos) {
+        if (number < 0) return null;
+        if (pos == 0) {
+            switch (number) {
+                case 1: return "Rey";
+                case 2: return "Peón";
+                case 3: return "Torre";
+                case 4: return "Dama";
+                case 6: return "Alfil";
+                case 8: return "Caballo";
+                default: return null;
             }
+        } else if (pos == 1) {
+            if (number >= 1 && number <= 8) return String.valueOf((char) ('A' + number - 1));
+            return null;
         } else {
-            lastPiece = "— (" + n + " golpe" + (n == 1 ? "" : "s") + ")";
+            if (number >= 1 && number <= 8) return String.valueOf(number);
+            return null;
+        }
+    }
+
+    private void handleSymbol(int number, String code, int n) {
+        String codeStr = (code == null ? "-----" : code);
+        String name = interpretSymbol(number, movePos);
+        if (name == null) {
+            lastPiece = "no reconocido (" + n + " golpes, " + codeStr + ")";
+            speak("no reconocido");
+            if (recording) logRow("SYM,INVALID," + number + "," + codeStr + ",,,,,");
+            updatePieceView();
+            updateStatus();
+            return;
+        }
+        moveParts[movePos] = name;
+        movePos++;
+        speak(name);
+        if (recording) {
+            logRow("SYM," + name + "," + number + "," + codeStr + ",pos" + (movePos - 1) + ",,,,");
+        }
+        if (movePos >= MOVE_LEN) {
+            String move = moveParts[0] + " " + moveParts[1] + " " + moveParts[2];
+            lastPiece = move;
+            speak(move);
+            if (recording) {
+                logRow("MOVE," + moveParts[0] + "," + moveParts[1] + "," + moveParts[2] + ",,,,,");
+            }
+            movePos = 0;
         }
         updatePieceView();
         updateStatus();
     }
 
-    // Clasifica una ráfaga por número de golpes y ritmo.
-    private String classifyPiece(long[] t, int n) {
-        if (n == 2) {
-            cRook++;
-            return "TORRE";
-        }
-        if (n == 4) {
-            cKnight++;
-            return "CABALLO";
-        }
-        if (n == 3) {
-            long g1 = t[1] - t[0];   // gap golpe1->golpe2
-            long g2 = t[2] - t[1];   // gap golpe2->golpe3
-            // Reina: 2 rápidos + 1 lento (primer gap corto, segundo mucho mayor).
-            if (g1 <= QUEEN_FAST_GAP_MS && g2 >= g1 * QUEEN_SLOW_RATIO) {
-                cQueen++;
-                return "REINA";
-            }
-            cBishop++;
-            return "ALFIL";
-        }
-        return null;  // 1 golpe (accidental) o 5+ : no es una pieza
-    }
-
     private void updateStatus() {
-        statusView.setText("Orientación: " + orientation + "   Racha: " + burstLen);
+        statusView.setText("Orientación: " + orientation + "   Golpes: " + burstLen);
     }
 
     private void updatePieceView() {
-        pieceView.setText("Última: " + lastPiece
-                + "\nTorre:" + cRook + "  Alfil:" + cBishop
-                + "  Caballo:" + cKnight + "  Reina:" + cQueen);
+        StringBuilder sb = new StringBuilder("Jugada: ");
+        for (int i = 0; i < MOVE_LEN; i++) {
+            sb.append(i < movePos && moveParts[i] != null ? moveParts[i] : "·");
+            if (i < MOVE_LEN - 1) sb.append(" · ");
+        }
+        sb.append("\nÚltimo: ").append(lastPiece);
+        pieceView.setText(sb.toString());
     }
 
     @Override
@@ -490,7 +560,8 @@ public class MainActivity extends Activity implements SensorEventListener {
                 .append(" & motion<").append(KNOCK_MOTION_THRESHOLD).append(")\n");
         logBuffer.append("# COLOR v1=RED|BLUE | orient:UP/DOWN/EDGE | audio=pico sonido 0..1")
                 .append(withAudio ? "" : " (micrófono NO disponible)").append("\n");
-        logBuffer.append("# PIECE v1=pieza(TORRE/ALFIL/CABALLO/REINA) v2=nºgolpes de la ráfaga\n");
+        logBuffer.append("# SYM   v1=símbolo v2=número v3=código5bits v4=posición\n");
+        logBuffer.append("# MOVE  v1=pieza v2=columna v3=fila\n");
         logBuffer.append("t_ms,type,v1,v2,v3,v4,v5,v6,v7,v8,v9\n");
         recordStartRealtime = SystemClock.elapsedRealtime();
         recording = true;
