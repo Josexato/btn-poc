@@ -14,6 +14,8 @@ import android.media.AudioRecord;
 import android.media.MediaRecorder;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.SystemClock;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -97,6 +99,26 @@ public class MainActivity extends Activity implements SensorEventListener {
     // Umbral (m/s^2) para decidir boca arriba / boca abajo por el eje Z.
     private static final float FACE_Z_THRESHOLD = 7.0f;
 
+    // --- Reconocimiento de patrones (secuencias de golpes = piezas) ---
+    //  2 golpes            -> Torre
+    //  3 golpes (uniformes) -> Alfil
+    //  3 golpes (2 rápidos + 1 lento) -> Reina
+    //  4 golpes            -> Caballo
+    // Una ráfaga se cierra cuando pasan BURST_GAP_MS sin nuevos golpes.
+    private static final long BURST_GAP_MS = 1200L;
+    // Para la Reina: los 2 primeros golpes van "rápidos" (gap corto) y el 3º
+    // "lento" (gap claramente mayor).
+    private static final long QUEEN_FAST_GAP_MS = 450L;
+    private static final float QUEEN_SLOW_RATIO = 1.8f;
+
+    private TextView pieceView;
+    private final long[] burstTimes = new long[16];
+    private int burstLen = 0;
+    private Handler patternHandler;
+    private Runnable finalizeBurst;
+    private String lastPiece = "—";
+    private int cRook = 0, cBishop = 0, cKnight = 0, cQueen = 0;
+
     // --- Grabación para calibración ---
     private boolean recording = false;
     private long recordStartRealtime = 0L;
@@ -125,11 +147,26 @@ public class MainActivity extends Activity implements SensorEventListener {
         root.setGravity(Gravity.CENTER);
 
         statusView = new TextView(this);
-        statusView.setText("Orientación: ?   Golpes: 0");
-        statusView.setPadding(0, 0, 0, 32);
+        statusView.setText("Orientación: ?   Racha: 0");
+        statusView.setPadding(0, 0, 0, 16);
         statusView.setLayoutParams(new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        pieceView = new TextView(this);
+        pieceView.setPadding(0, 0, 0, 32);
+        pieceView.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        patternHandler = new Handler(Looper.getMainLooper());
+        finalizeBurst = new Runnable() {
+            @Override
+            public void run() {
+                classifyBurst();
+            }
+        };
+        updatePieceView();
 
         colorButton = new Button(this);
         colorButton.setText("Tócame o dame un golpecito");
@@ -163,6 +200,7 @@ public class MainActivity extends Activity implements SensorEventListener {
         });
 
         root.addView(statusView);
+        root.addView(pieceView);
         root.addView(colorButton);
         root.addView(recordButton);
         setContentView(root);
@@ -193,6 +231,11 @@ public class MainActivity extends Activity implements SensorEventListener {
         magBufSize = 0;
         magBufHead = 0;
         motionEwma = 0f;
+        // Cancelamos cualquier ráfaga en curso.
+        if (patternHandler != null) {
+            patternHandler.removeCallbacks(finalizeBurst);
+        }
+        burstLen = 0;
     }
 
     @Override
@@ -289,12 +332,69 @@ public class MainActivity extends Activity implements SensorEventListener {
                         jerk, p2p, motionBefore, orient, audioPeak));
             }
             toggleColor();
+            registerKnockInBurst(now);
             updateStatus();
         }
     }
 
+    // Añade el golpe a la ráfaga en curso y reprograma el cierre de la ráfaga.
+    private void registerKnockInBurst(long now) {
+        if (burstLen < burstTimes.length) {
+            burstTimes[burstLen++] = now;
+        }
+        patternHandler.removeCallbacks(finalizeBurst);
+        patternHandler.postDelayed(finalizeBurst, BURST_GAP_MS);
+    }
+
+    // Se llama cuando la ráfaga termina (sin golpes durante BURST_GAP_MS).
+    private void classifyBurst() {
+        String piece = classifyPiece(burstTimes, burstLen);
+        int n = burstLen;
+        burstLen = 0;
+        if (piece != null) {
+            lastPiece = piece + " (" + n + ")";
+            if (recording) {
+                logRow("PIECE," + piece + "," + n + ",,,,,,,");
+            }
+        } else {
+            lastPiece = "— (" + n + " golpe" + (n == 1 ? "" : "s") + ")";
+        }
+        updatePieceView();
+        updateStatus();
+    }
+
+    // Clasifica una ráfaga por número de golpes y ritmo.
+    private String classifyPiece(long[] t, int n) {
+        if (n == 2) {
+            cRook++;
+            return "TORRE";
+        }
+        if (n == 4) {
+            cKnight++;
+            return "CABALLO";
+        }
+        if (n == 3) {
+            long g1 = t[1] - t[0];   // gap golpe1->golpe2
+            long g2 = t[2] - t[1];   // gap golpe2->golpe3
+            // Reina: 2 rápidos + 1 lento (primer gap corto, segundo mucho mayor).
+            if (g1 <= QUEEN_FAST_GAP_MS && g2 >= g1 * QUEEN_SLOW_RATIO) {
+                cQueen++;
+                return "REINA";
+            }
+            cBishop++;
+            return "ALFIL";
+        }
+        return null;  // 1 golpe (accidental) o 5+ : no es una pieza
+    }
+
     private void updateStatus() {
-        statusView.setText("Orientación: " + orientation + "   Golpes: " + knockCount);
+        statusView.setText("Orientación: " + orientation + "   Racha: " + burstLen);
+    }
+
+    private void updatePieceView() {
+        pieceView.setText("Última: " + lastPiece
+                + "\nTorre:" + cRook + "  Alfil:" + cBishop
+                + "  Caballo:" + cKnight + "  Reina:" + cQueen);
     }
 
     @Override
@@ -357,6 +457,7 @@ public class MainActivity extends Activity implements SensorEventListener {
                 .append(" & motion<").append(KNOCK_MOTION_THRESHOLD).append(")\n");
         logBuffer.append("# COLOR v1=RED|BLUE | orient:UP/DOWN/EDGE | audio=pico sonido 0..1")
                 .append(withAudio ? "" : " (micrófono NO disponible)").append("\n");
+        logBuffer.append("# PIECE v1=pieza(TORRE/ALFIL/CABALLO/REINA) v2=nºgolpes de la ráfaga\n");
         logBuffer.append("t_ms,type,v1,v2,v3,v4,v5,v6,v7,v8,v9\n");
         recordStartRealtime = SystemClock.elapsedRealtime();
         recording = true;
