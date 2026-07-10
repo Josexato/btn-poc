@@ -1,12 +1,17 @@
 package com.poc.btn;
 
+import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
+import android.media.AudioFormat;
+import android.media.AudioRecord;
+import android.media.MediaRecorder;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.SystemClock;
@@ -97,6 +102,15 @@ public class MainActivity extends Activity implements SensorEventListener {
     private long recordStartRealtime = 0L;
     private StringBuilder logBuffer;
 
+    // --- Micrófono (solo calibración): nivel de sonido junto al acelerómetro ---
+    private static final int REQ_AUDIO = 1;
+    private boolean audioAsked = false;
+    private AudioRecord audioRecord;
+    private Thread audioThread;
+    private volatile boolean audioRunning = false;
+    // Último pico de audio normalizado (0..1) del frame más reciente.
+    private volatile float audioPeak = 0f;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -143,7 +157,7 @@ public class MainActivity extends Activity implements SensorEventListener {
                 if (recording) {
                     stopRecordingAndShare();
                 } else {
-                    startRecording();
+                    tryStartRecording();
                 }
             }
         });
@@ -181,6 +195,12 @@ public class MainActivity extends Activity implements SensorEventListener {
         motionEwma = 0f;
     }
 
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        stopAudio();
+    }
+
     // Registra CADA toque en la pantalla (lo que "detecta la pantalla").
     @Override
     public boolean dispatchTouchEvent(MotionEvent ev) {
@@ -192,7 +212,7 @@ public class MainActivity extends Activity implements SensorEventListener {
                 case MotionEvent.ACTION_MOVE: action = "MOVE"; break;
                 default: action = "OTHER"; break;
             }
-            logRow(String.format(Locale.US, "TOUCH,%s,%.1f,%.1f,,,,,",
+            logRow(String.format(Locale.US, "TOUCH,%s,%.1f,%.1f,,,,,,",
                     action, ev.getX(), ev.getY()));
         }
         return super.dispatchTouchEvent(ev);
@@ -254,8 +274,8 @@ public class MainActivity extends Activity implements SensorEventListener {
 
         // Loguea cada muestra del acelerómetro (lo que "siente").
         if (recording) {
-            logRow(String.format(Locale.US, "ACC,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%s",
-                    x, y, z, rawMag, jerk, p2p, motionBefore, orient));
+            logRow(String.format(Locale.US, "ACC,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%s,%.4f",
+                    x, y, z, rawMag, jerk, p2p, motionBefore, orient, audioPeak));
         }
 
         if (jerk > KNOCK_JERK_THRESHOLD
@@ -265,8 +285,8 @@ public class MainActivity extends Activity implements SensorEventListener {
             lastKnockTime = now;
             knockCount++;
             if (recording) {
-                logRow(String.format(Locale.US, "KNOCK,,,,,%.4f,%.4f,%.4f,%s",
-                        jerk, p2p, motionBefore, orient));
+                logRow(String.format(Locale.US, "KNOCK,,,,,%.4f,%.4f,%.4f,%s,%.4f",
+                        jerk, p2p, motionBefore, orient, audioPeak));
             }
             toggleColor();
             updateStatus();
@@ -286,30 +306,68 @@ public class MainActivity extends Activity implements SensorEventListener {
         isRed = !isRed;
         colorButton.setBackgroundColor(isRed ? Color.RED : Color.BLUE);
         if (recording) {
-            logRow("COLOR," + (isRed ? "RED" : "BLUE") + ",,,,,,,");
+            logRow("COLOR," + (isRed ? "RED" : "BLUE") + ",,,,,,,,");
         }
     }
 
     // --- Grabación ---
 
-    private void startRecording() {
+    // Pide el micrófono la primera vez; después graba con audio (si se concedió)
+    // o sin audio (si se denegó). El acelerómetro se graba siempre.
+    private void tryStartRecording() {
+        if (hasAudioPermission()) {
+            startRecording(true);
+        } else if (!audioAsked) {
+            audioAsked = true;
+            requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQ_AUDIO);
+        } else {
+            startRecording(false);
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions,
+                                           int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQ_AUDIO) {
+            boolean granted = hasAudioPermission();
+            if (!granted) {
+                Toast.makeText(this, "Sin micrófono: se grabará solo el acelerómetro",
+                        Toast.LENGTH_SHORT).show();
+            }
+            startRecording(granted);
+        }
+    }
+
+    private boolean hasAudioPermission() {
+        return checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private void startRecording(boolean withAudio) {
+        if (withAudio) {
+            startAudio();
+        }
         logBuffer = new StringBuilder();
-        // Formato: t_ms,type,v1..v7  (v* segun el tipo de fila)
-        logBuffer.append("# ACC   v1=x v2=y v3=z v4=rawMag v5=jerk v6=p2p v7=motion v8=orient\n");
+        // Formato: t_ms,type,v1..v9  (v* segun el tipo de fila)
+        logBuffer.append("# ACC   v1=x v2=y v3=z v4=rawMag v5=jerk v6=p2p v7=motion v8=orient v9=audio\n");
         logBuffer.append("# TOUCH v1=action v2=x_px v3=y_px\n");
-        logBuffer.append("# KNOCK v5=jerk v6=p2p v7=motion v8=orient  (jerk>").append(KNOCK_JERK_THRESHOLD)
+        logBuffer.append("# KNOCK v5=jerk v6=p2p v7=motion v8=orient v9=audio  (jerk>").append(KNOCK_JERK_THRESHOLD)
                 .append(" & jerk/p2p>").append(KNOCK_RATIO_THRESHOLD)
                 .append(" & motion<").append(KNOCK_MOTION_THRESHOLD).append(")\n");
-        logBuffer.append("# COLOR v1=RED|BLUE   | orient: UP=boca arriba DOWN=boca abajo EDGE=canto\n");
-        logBuffer.append("t_ms,type,v1,v2,v3,v4,v5,v6,v7,v8\n");
+        logBuffer.append("# COLOR v1=RED|BLUE | orient:UP/DOWN/EDGE | audio=pico sonido 0..1")
+                .append(withAudio ? "" : " (micrófono NO disponible)").append("\n");
+        logBuffer.append("t_ms,type,v1,v2,v3,v4,v5,v6,v7,v8,v9\n");
         recordStartRealtime = SystemClock.elapsedRealtime();
         recording = true;
         recordButton.setText("■ Detener y compartir");
-        Toast.makeText(this, "Grabando… mueve y golpea el teléfono", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, withAudio ? "Grabando con micrófono…" : "Grabando (sin micrófono)…",
+                Toast.LENGTH_SHORT).show();
     }
 
     private void stopRecordingAndShare() {
         recording = false;
+        stopAudio();
         recordButton.setText("● Grabar acelerómetro");
 
         StringBuilder buffer = logBuffer;
@@ -326,6 +384,68 @@ public class MainActivity extends Activity implements SensorEventListener {
         }
 
         shareLogFile(logFile);
+    }
+
+    // --- Micrófono: captura en un hilo aparte el pico de audio por frame ---
+
+    private void startAudio() {
+        final int rate = 44100;
+        int minBuf = AudioRecord.getMinBufferSize(rate,
+                AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
+        if (minBuf <= 0) return;
+        final int bufSize = Math.max(minBuf, 4096);
+        try {
+            audioRecord = new AudioRecord(MediaRecorder.AudioSource.MIC, rate,
+                    AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufSize);
+            if (audioRecord.getState() != AudioRecord.STATE_INITIALIZED) {
+                audioRecord.release();
+                audioRecord = null;
+                return;
+            }
+            audioRecord.startRecording();
+        } catch (Exception e) {
+            audioRecord = null;
+            return;
+        }
+        audioRunning = true;
+        audioThread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                short[] frame = new short[512];  // ~12ms a 44.1kHz
+                while (audioRunning) {
+                    int n = audioRecord.read(frame, 0, frame.length);
+                    if (n > 0) {
+                        int peak = 0;
+                        for (int i = 0; i < n; i++) {
+                            int a = Math.abs(frame[i]);
+                            if (a > peak) peak = a;
+                        }
+                        audioPeak = peak / 32768f;
+                    }
+                }
+            }
+        });
+        audioThread.start();
+    }
+
+    private void stopAudio() {
+        audioRunning = false;
+        if (audioThread != null) {
+            try {
+                audioThread.join(300);
+            } catch (InterruptedException ignored) {
+            }
+            audioThread = null;
+        }
+        if (audioRecord != null) {
+            try {
+                audioRecord.stop();
+            } catch (IllegalStateException ignored) {
+            }
+            audioRecord.release();
+            audioRecord = null;
+        }
+        audioPeak = 0f;
     }
 
     private File writeLogFile(String content) {
