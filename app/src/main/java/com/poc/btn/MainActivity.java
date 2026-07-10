@@ -14,8 +14,10 @@ import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.core.content.FileProvider;
@@ -78,6 +80,14 @@ public class MainActivity extends Activity implements SensorEventListener {
     private boolean filtersInitialized = false;
 
     private long lastKnockTime = 0L;
+    private int knockCount = 0;
+
+    // Orientación actual según el eje Z del acelerómetro.
+    private TextView statusView;
+    private String orientation = "?";
+
+    // Umbral (m/s^2) para decidir boca arriba / boca abajo por el eje Z.
+    private static final float FACE_Z_THRESHOLD = 7.0f;
 
     // --- Grabación para calibración ---
     private boolean recording = false;
@@ -88,9 +98,21 @@ public class MainActivity extends Activity implements SensorEventListener {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        // Evita que la pantalla se apague por timeout mientras la app está
+        // en primer plano: al apagarse, la Activity se pausa y se dejaba de
+        // recibir el acelerómetro (era la causa del "deja de grabar boca abajo").
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setGravity(Gravity.CENTER);
+
+        statusView = new TextView(this);
+        statusView.setText("Orientación: ?   Golpes: 0");
+        statusView.setPadding(0, 0, 0, 32);
+        statusView.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
 
         colorButton = new Button(this);
         colorButton.setText("Tócame o dame un golpecito");
@@ -123,6 +145,7 @@ public class MainActivity extends Activity implements SensorEventListener {
             }
         });
 
+        root.addView(statusView);
         root.addView(colorButton);
         root.addView(recordButton);
         setContentView(root);
@@ -166,7 +189,7 @@ public class MainActivity extends Activity implements SensorEventListener {
                 case MotionEvent.ACTION_MOVE: action = "MOVE"; break;
                 default: action = "OTHER"; break;
             }
-            logRow(String.format(Locale.US, "TOUCH,%s,%.1f,%.1f,,,,",
+            logRow(String.format(Locale.US, "TOUCH,%s,%.1f,%.1f,,,,,",
                     action, ev.getX(), ev.getY()));
         }
         return super.dispatchTouchEvent(ev);
@@ -184,6 +207,15 @@ public class MainActivity extends Activity implements SensorEventListener {
 
         final float rawMag = (float) Math.sqrt(x * x + y * y + z * z);
         final long now = SystemClock.elapsedRealtime();
+
+        // Orientación por el eje Z: boca arriba (UP), boca abajo (DOWN) o de
+        // canto/inclinado (EDGE). Solo refresca la pantalla si cambia.
+        final String orient = (z > FACE_Z_THRESHOLD) ? "UP"
+                : (z < -FACE_Z_THRESHOLD ? "DOWN" : "EDGE");
+        if (!orient.equals(orientation)) {
+            orientation = orient;
+            updateStatus();
+        }
 
         if (!filtersInitialized) {
             prevRawMag = rawMag;
@@ -219,8 +251,8 @@ public class MainActivity extends Activity implements SensorEventListener {
 
         // Loguea cada muestra del acelerómetro (lo que "siente").
         if (recording) {
-            logRow(String.format(Locale.US, "ACC,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f",
-                    x, y, z, rawMag, jerk, p2p, motionBefore));
+            logRow(String.format(Locale.US, "ACC,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%s",
+                    x, y, z, rawMag, jerk, p2p, motionBefore, orient));
         }
 
         if (jerk > KNOCK_JERK_THRESHOLD
@@ -228,11 +260,18 @@ public class MainActivity extends Activity implements SensorEventListener {
                 && motionBefore < KNOCK_MOTION_THRESHOLD
                 && now - lastKnockTime > KNOCK_COOLDOWN_MS) {
             lastKnockTime = now;
+            knockCount++;
             if (recording) {
-                logRow(String.format(Locale.US, "KNOCK,,,,,%.4f,%.4f,%.4f", jerk, p2p, motionBefore));
+                logRow(String.format(Locale.US, "KNOCK,,,,,%.4f,%.4f,%.4f,%s",
+                        jerk, p2p, motionBefore, orient));
             }
             toggleColor();
+            updateStatus();
         }
+    }
+
+    private void updateStatus() {
+        statusView.setText("Orientación: " + orientation + "   Golpes: " + knockCount);
     }
 
     @Override
@@ -244,7 +283,7 @@ public class MainActivity extends Activity implements SensorEventListener {
         isRed = !isRed;
         colorButton.setBackgroundColor(isRed ? Color.RED : Color.BLUE);
         if (recording) {
-            logRow("COLOR," + (isRed ? "RED" : "BLUE") + ",,,,,,");
+            logRow("COLOR," + (isRed ? "RED" : "BLUE") + ",,,,,,,");
         }
     }
 
@@ -253,13 +292,13 @@ public class MainActivity extends Activity implements SensorEventListener {
     private void startRecording() {
         logBuffer = new StringBuilder();
         // Formato: t_ms,type,v1..v7  (v* segun el tipo de fila)
-        logBuffer.append("# ACC   v1=x v2=y v3=z v4=rawMag v5=jerk v6=p2p v7=motion\n");
+        logBuffer.append("# ACC   v1=x v2=y v3=z v4=rawMag v5=jerk v6=p2p v7=motion v8=orient\n");
         logBuffer.append("# TOUCH v1=action v2=x_px v3=y_px\n");
-        logBuffer.append("# KNOCK v5=jerk v6=p2p v7=motion  (jerk>").append(KNOCK_JERK_THRESHOLD)
+        logBuffer.append("# KNOCK v5=jerk v6=p2p v7=motion v8=orient  (jerk>").append(KNOCK_JERK_THRESHOLD)
                 .append(" & jerk/p2p>").append(KNOCK_RATIO_THRESHOLD)
                 .append(" & motion<").append(KNOCK_MOTION_THRESHOLD).append(")\n");
-        logBuffer.append("# COLOR v1=RED|BLUE\n");
-        logBuffer.append("t_ms,type,v1,v2,v3,v4,v5,v6,v7\n");
+        logBuffer.append("# COLOR v1=RED|BLUE   | orient: UP=boca arriba DOWN=boca abajo EDGE=canto\n");
+        logBuffer.append("t_ms,type,v1,v2,v3,v4,v5,v6,v7,v8\n");
         recordStartRealtime = SystemClock.elapsedRealtime();
         recording = true;
         recordButton.setText("■ Detener y compartir");
