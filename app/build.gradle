@@ -29,3 +29,8 @@ android {
         targetCompatibility JavaVersion.VERSION_17
     }
 }
+
+dependencies {
+    // Solo se usa para compartir el archivo de log vía FileProvider.
+    implementation 'androidx.core:core:1.13.1'
+}

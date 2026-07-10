@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Compartimos los logs generados en la cache interna de la app. -->
+    <cache-path name="logs" path="logs/" />
+</paths>
