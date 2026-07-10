@@ -111,10 +111,11 @@ public class MainActivity extends Activity implements SensorEventListener {
     // una Reina.
     private static final long BURST_GAP_MS = 900L;
     // Para la Reina: los 2 primeros golpes van "rápidos" (gap corto) y el 3º
-    // "lento". En los datos el ritmo separa limpio: Alfil ratio ~1.0-1.2,
-    // Reina ~1.7-3.5, así que 1.5 cae en medio del hueco.
+    // "lento". Análisis histórico (72 ráfagas de 3): el ratio g2/g1 es bimodal
+    // -> Alfil en ~1.0-1.4, valle en 1.4-1.8, Reina con pico en 2.0-2.5. Se
+    // exige que la pausa del 3er golpe sea al menos el DOBLE del primer hueco.
     private static final long QUEEN_FAST_GAP_MS = 450L;
-    private static final float QUEEN_SLOW_RATIO = 1.5f;
+    private static final float QUEEN_SLOW_RATIO = 2.0f;
 
     private TextView pieceView;
     private final long[] burstTimes = new long[16];
