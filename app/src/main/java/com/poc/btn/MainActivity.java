@@ -29,23 +29,28 @@ import java.util.Locale;
 
 public class MainActivity extends Activity implements SensorEventListener {
 
-    // Umbral del pico-a-pico de la magnitud dentro de una ventana corta.
-    // La magnitud total |a| es invariante a la rotación (girar no la altera);
-    // un golpe produce un bajón + rebote que se ve como una oscilación
-    // pico-a-pico. Calibrado con el celular apoyado en el pecho (golpes muy
-    // suaves): piso de ruido ~0.39, golpes desde ~0.5. 0.8 detecta ~50% de los
-    // golpes suaves sin falsos positivos; bajarlo sube aciertos y falsos.
-    private static final float KNOCK_P2P_THRESHOLD = 0.8f;
+    // Un golpe se reconoce por TRES condiciones a la vez (calibrado con datos
+    // reales: celular en la pierna/pecho y golpes en pantalla/espalda, frente a
+    // giros y manipulación que antes daban falsos positivos):
+    //
+    //  1) jerk alto: salto brusco de la magnitud entre muestras.
+    //  2) impulso concentrado: jerk/p2p alto. Un golpe mete todo el salto en un
+    //     instante (jerk ≈ p2p, ratio ~1); girar reparte un swing grande en
+    //     muchas muestras (p2p enorme, jerk pequeño, ratio bajo).
+    //  3) en reposo justo antes: el nivel de movimiento reciente es bajo. Un
+    //     golpe ocurre sobre un teléfono quieto; girar es movimiento sostenido.
+    private static final float KNOCK_JERK_THRESHOLD = 0.7f;
+    private static final float KNOCK_RATIO_THRESHOLD = 0.6f;   // jerk / p2p
+    private static final float KNOCK_MOTION_THRESHOLD = 0.22f;  // reposo previo
 
     // Ventana (ms) sobre la que se mide el pico-a-pico de la magnitud.
     private static final long P2P_WINDOW_MS = 110L;
 
+    // Factor del EWMA que estima el nivel de movimiento reciente (memoria ~300ms).
+    private static final float MOTION_DECAY = 0.985f;
+
     // Tiempo mínimo entre golpes detectados para evitar rebotes (ms).
     private static final long KNOCK_COOLDOWN_MS = 300L;
-
-    // Filtro pasa-bajos lento para la línea base de la magnitud (~9.81), solo
-    // para loguear 'dev' y seguir calibrando.
-    private static final float MAG_BASELINE_ALPHA = 0.9f;
 
     private boolean isRed = true;
     private Button colorButton;
@@ -55,15 +60,15 @@ public class MainActivity extends Activity implements SensorEventListener {
     private Sensor accelerometer;
 
     // Buffer circular de magnitudes recientes para el pico-a-pico en ventana.
-    private static final int MAG_BUF = 256;
+    private static final int MAG_BUF = 512;
     private final float[] magBuf = new float[MAG_BUF];
     private final long[] magBufTime = new long[MAG_BUF];
     private int magBufHead = 0;
     private int magBufSize = 0;
 
     // Estado de los filtros del acelerómetro.
-    private float magBaseline = 0f;
     private float prevRawMag = 0f;
+    private float motionEwma = 0f;
     private boolean filtersInitialized = false;
 
     private long lastKnockTime = 0L;
@@ -141,6 +146,7 @@ public class MainActivity extends Activity implements SensorEventListener {
         filtersInitialized = false;
         magBufSize = 0;
         magBufHead = 0;
+        motionEwma = 0f;
     }
 
     // Registra CADA toque en la pantalla (lo que "detecta la pantalla").
@@ -174,8 +180,8 @@ public class MainActivity extends Activity implements SensorEventListener {
         final long now = SystemClock.elapsedRealtime();
 
         if (!filtersInitialized) {
-            magBaseline = rawMag;
             prevRawMag = rawMag;
+            motionEwma = 0f;
             filtersInitialized = true;
         }
 
@@ -185,9 +191,7 @@ public class MainActivity extends Activity implements SensorEventListener {
         magBufHead = (magBufHead + 1) % MAG_BUF;
         if (magBufSize < MAG_BUF) magBufSize++;
 
-        // Pico-a-pico de la magnitud en la ventana P2P_WINDOW_MS (feature de
-        // detección: la magnitud es invariante a la rotación y un golpe produce
-        // un bajón + rebote que agranda el pico-a-pico).
+        // Pico-a-pico de la magnitud en la ventana P2P_WINDOW_MS.
         float mn = rawMag, mx = rawMag;
         for (int i = 0; i < magBufSize; i++) {
             int idx = (magBufHead - 1 - i + MAG_BUF) % MAG_BUF;
@@ -197,22 +201,28 @@ public class MainActivity extends Activity implements SensorEventListener {
         }
         final float p2p = mx - mn;
 
-        // Features auxiliares solo para el log (seguir calibrando).
-        magBaseline = MAG_BASELINE_ALPHA * magBaseline + (1 - MAG_BASELINE_ALPHA) * rawMag;
-        final float dev = rawMag - magBaseline;
-        final float jerk = rawMag - prevRawMag;
+        final float jerk = Math.abs(rawMag - prevRawMag);
         prevRawMag = rawMag;
+        final float ratio = (p2p > 0f) ? jerk / p2p : 0f;
+
+        // Nivel de movimiento reciente ANTES de incorporar esta muestra
+        // (para saber si el teléfono estaba en reposo justo antes del impulso).
+        final float motionBefore = motionEwma;
+        motionEwma = MOTION_DECAY * motionEwma + (1 - MOTION_DECAY) * jerk;
 
         // Loguea cada muestra del acelerómetro (lo que "siente").
         if (recording) {
             logRow(String.format(Locale.US, "ACC,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f",
-                    x, y, z, rawMag, dev, jerk, p2p));
+                    x, y, z, rawMag, jerk, p2p, motionBefore));
         }
 
-        if (p2p > KNOCK_P2P_THRESHOLD && now - lastKnockTime > KNOCK_COOLDOWN_MS) {
+        if (jerk > KNOCK_JERK_THRESHOLD
+                && ratio > KNOCK_RATIO_THRESHOLD
+                && motionBefore < KNOCK_MOTION_THRESHOLD
+                && now - lastKnockTime > KNOCK_COOLDOWN_MS) {
             lastKnockTime = now;
             if (recording) {
-                logRow(String.format(Locale.US, "KNOCK,,,,,%.4f,%.4f,%.4f", dev, jerk, p2p));
+                logRow(String.format(Locale.US, "KNOCK,,,,,%.4f,%.4f,%.4f", jerk, p2p, motionBefore));
             }
             toggleColor();
         }
@@ -236,9 +246,11 @@ public class MainActivity extends Activity implements SensorEventListener {
     private void startRecording() {
         logBuffer = new StringBuilder();
         // Formato: t_ms,type,v1..v7  (v* segun el tipo de fila)
-        logBuffer.append("# ACC   v1=x v2=y v3=z v4=rawMag v5=dev v6=jerk v7=p2p\n");
+        logBuffer.append("# ACC   v1=x v2=y v3=z v4=rawMag v5=jerk v6=p2p v7=motion\n");
         logBuffer.append("# TOUCH v1=action v2=x_px v3=y_px\n");
-        logBuffer.append("# KNOCK v5=dev v6=jerk v7=p2p  (detector por p2p, umbral=").append(KNOCK_P2P_THRESHOLD).append(")\n");
+        logBuffer.append("# KNOCK v5=jerk v6=p2p v7=motion  (jerk>").append(KNOCK_JERK_THRESHOLD)
+                .append(" & jerk/p2p>").append(KNOCK_RATIO_THRESHOLD)
+                .append(" & motion<").append(KNOCK_MOTION_THRESHOLD).append(")\n");
         logBuffer.append("# COLOR v1=RED|BLUE\n");
         logBuffer.append("t_ms,type,v1,v2,v3,v4,v5,v6,v7\n");
         recordStartRealtime = SystemClock.elapsedRealtime();
