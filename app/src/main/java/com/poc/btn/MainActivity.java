@@ -58,7 +58,10 @@ public class MainActivity extends Activity implements SensorEventListener {
     private static final float MOTION_CAP = 0.5f;
 
     // Tiempo mínimo entre golpes detectados para evitar rebotes (ms).
-    private static final long KNOCK_COOLDOWN_MS = 300L;
+    // La fase brusca de un golpe (jerk>umbral) dura <50ms, así que 150ms evita
+    // el doble conteo y permite golpes seguidos (~6/seg). Antes 300ms perdía
+    // los golpes rápidos.
+    private static final long KNOCK_COOLDOWN_MS = 150L;
 
     private boolean isRed = true;
     private Button colorButton;
