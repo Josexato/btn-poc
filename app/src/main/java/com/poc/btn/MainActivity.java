@@ -17,6 +17,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.speech.tts.TextToSpeech;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
@@ -123,6 +124,10 @@ public class MainActivity extends Activity implements SensorEventListener {
     private String lastPiece = "—";
     private int cRook = 0, cBishop = 0, cKnight = 0, cQueen = 0;
 
+    // Voz: dice el nombre de la pieza (útil con el teléfono boca abajo).
+    private TextToSpeech tts;
+    private boolean ttsReady = false;
+
     // --- Grabación para calibración ---
     private boolean recording = false;
     private long recordStartRealtime = 0L;
@@ -213,6 +218,23 @@ public class MainActivity extends Activity implements SensorEventListener {
         if (sensorManager != null) {
             accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
         }
+
+        // Voz en español para anunciar la pieza detectada.
+        tts = new TextToSpeech(this, new TextToSpeech.OnInitListener() {
+            @Override
+            public void onInit(int status) {
+                if (status == TextToSpeech.SUCCESS && tts != null) {
+                    tts.setLanguage(new Locale("es", "ES"));
+                    ttsReady = true;
+                }
+            }
+        });
+    }
+
+    private void speak(String text) {
+        if (tts != null && ttsReady) {
+            tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "piece");
+        }
     }
 
     @Override
@@ -246,6 +268,11 @@ public class MainActivity extends Activity implements SensorEventListener {
     protected void onDestroy() {
         super.onDestroy();
         stopAudio();
+        if (tts != null) {
+            tts.stop();
+            tts.shutdown();
+            tts = null;
+        }
     }
 
     // Registra CADA toque en la pantalla (lo que "detecta la pantalla").
@@ -357,6 +384,7 @@ public class MainActivity extends Activity implements SensorEventListener {
         burstLen = 0;
         if (piece != null) {
             lastPiece = piece + " (" + n + ")";
+            speak(piece);
             if (recording) {
                 logRow("PIECE," + piece + "," + n + ",,,,,,,");
             }
