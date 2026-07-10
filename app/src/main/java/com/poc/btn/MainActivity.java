@@ -29,20 +29,22 @@ import java.util.Locale;
 
 public class MainActivity extends Activity implements SensorEventListener {
 
-    // Umbral del "jerk" de la magnitud (m/s^2 entre muestras) para un golpecito.
-    // La magnitud total |a| es invariante a la rotación, así que girar el
-    // teléfono no la altera; un golpe la hace saltar de golpe. Calibrado con
-    // datos reales: los golpes suaves dan saltos de ~1.7-3.4; manipular <~1.0.
-    private static final float KNOCK_JERK_THRESHOLD = 1.2f;
+    // Umbral del pico-a-pico de la magnitud dentro de una ventana corta.
+    // La magnitud total |a| es invariante a la rotación (girar no la altera);
+    // un golpe produce un bajón + rebote que se ve como una oscilación
+    // pico-a-pico. Calibrado con el celular apoyado en el pecho (golpes muy
+    // suaves): piso de ruido ~0.39, golpes desde ~0.5. 0.8 detecta ~50% de los
+    // golpes suaves sin falsos positivos; bajarlo sube aciertos y falsos.
+    private static final float KNOCK_P2P_THRESHOLD = 0.8f;
+
+    // Ventana (ms) sobre la que se mide el pico-a-pico de la magnitud.
+    private static final long P2P_WINDOW_MS = 110L;
 
     // Tiempo mínimo entre golpes detectados para evitar rebotes (ms).
     private static final long KNOCK_COOLDOWN_MS = 300L;
 
-    // Filtro pasa-bajos de la gravedad vectorial (solo para loguear el feature
-    // antiguo 'linearMag' y poder compararlo; ya no se usa para detectar).
-    private static final float ALPHA = 0.8f;
-
-    // Filtro pasa-bajos lento para la línea base de la magnitud (~9.81).
+    // Filtro pasa-bajos lento para la línea base de la magnitud (~9.81), solo
+    // para loguear 'dev' y seguir calibrando.
     private static final float MAG_BASELINE_ALPHA = 0.9f;
 
     private boolean isRed = true;
@@ -52,8 +54,14 @@ public class MainActivity extends Activity implements SensorEventListener {
     private SensorManager sensorManager;
     private Sensor accelerometer;
 
+    // Buffer circular de magnitudes recientes para el pico-a-pico en ventana.
+    private static final int MAG_BUF = 256;
+    private final float[] magBuf = new float[MAG_BUF];
+    private final long[] magBufTime = new long[MAG_BUF];
+    private int magBufHead = 0;
+    private int magBufSize = 0;
+
     // Estado de los filtros del acelerómetro.
-    private final float[] gravity = new float[3];
     private float magBaseline = 0f;
     private float prevRawMag = 0f;
     private boolean filtersInitialized = false;
@@ -119,7 +127,7 @@ public class MainActivity extends Activity implements SensorEventListener {
         super.onResume();
         if (sensorManager != null && accelerometer != null) {
             sensorManager.registerListener(this, accelerometer,
-                    SensorManager.SENSOR_DELAY_GAME);
+                    SensorManager.SENSOR_DELAY_FASTEST);
         }
     }
 
@@ -131,6 +139,8 @@ public class MainActivity extends Activity implements SensorEventListener {
         }
         // Reiniciamos los filtros para que al volver no arrastren estado viejo.
         filtersInitialized = false;
+        magBufSize = 0;
+        magBufHead = 0;
     }
 
     // Registra CADA toque en la pantalla (lo que "detecta la pantalla").
@@ -161,34 +171,33 @@ public class MainActivity extends Activity implements SensorEventListener {
         final float z = event.values[2];
 
         final float rawMag = (float) Math.sqrt(x * x + y * y + z * z);
+        final long now = SystemClock.elapsedRealtime();
 
         if (!filtersInitialized) {
-            gravity[0] = x;
-            gravity[1] = y;
-            gravity[2] = z;
             magBaseline = rawMag;
             prevRawMag = rawMag;
             filtersInitialized = true;
-            if (recording) {
-                logRow(String.format(Locale.US, "ACC,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f",
-                        x, y, z, rawMag, 0.0, 0.0, 0.0));
-            }
-            return;
         }
 
-        // Feature ANTIGUO (solo para el log, comparación): aceleración lineal
-        // vectorial = lectura - gravedad estimada. Es el que fallaba al girar.
-        gravity[0] = ALPHA * gravity[0] + (1 - ALPHA) * x;
-        gravity[1] = ALPHA * gravity[1] + (1 - ALPHA) * y;
-        gravity[2] = ALPHA * gravity[2] + (1 - ALPHA) * z;
-        final float lx = x - gravity[0];
-        final float ly = y - gravity[1];
-        final float lz = z - gravity[2];
-        final float linearMag = (float) Math.sqrt(lx * lx + ly * ly + lz * lz);
+        // Guarda la magnitud en el buffer circular (para el pico-a-pico).
+        magBuf[magBufHead] = rawMag;
+        magBufTime[magBufHead] = now;
+        magBufHead = (magBufHead + 1) % MAG_BUF;
+        if (magBufSize < MAG_BUF) magBufSize++;
 
-        // Feature NUEVO: la magnitud total es invariante a la rotación.
-        //  - dev  = desviación respecto a la línea base (~9.81)
-        //  - jerk = salto brusco de la magnitud entre muestras (lo que dispara)
+        // Pico-a-pico de la magnitud en la ventana P2P_WINDOW_MS (feature de
+        // detección: la magnitud es invariante a la rotación y un golpe produce
+        // un bajón + rebote que agranda el pico-a-pico).
+        float mn = rawMag, mx = rawMag;
+        for (int i = 0; i < magBufSize; i++) {
+            int idx = (magBufHead - 1 - i + MAG_BUF) % MAG_BUF;
+            if (now - magBufTime[idx] > P2P_WINDOW_MS) break;
+            if (magBuf[idx] < mn) mn = magBuf[idx];
+            if (magBuf[idx] > mx) mx = magBuf[idx];
+        }
+        final float p2p = mx - mn;
+
+        // Features auxiliares solo para el log (seguir calibrando).
         magBaseline = MAG_BASELINE_ALPHA * magBaseline + (1 - MAG_BASELINE_ALPHA) * rawMag;
         final float dev = rawMag - magBaseline;
         final float jerk = rawMag - prevRawMag;
@@ -197,18 +206,15 @@ public class MainActivity extends Activity implements SensorEventListener {
         // Loguea cada muestra del acelerómetro (lo que "siente").
         if (recording) {
             logRow(String.format(Locale.US, "ACC,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f",
-                    x, y, z, rawMag, linearMag, dev, jerk));
+                    x, y, z, rawMag, dev, jerk, p2p));
         }
 
-        if (Math.abs(jerk) > KNOCK_JERK_THRESHOLD) {
-            long now = SystemClock.elapsedRealtime();
-            if (now - lastKnockTime > KNOCK_COOLDOWN_MS) {
-                lastKnockTime = now;
-                if (recording) {
-                    logRow(String.format(Locale.US, "KNOCK,,,,,%.4f,%.4f", dev, jerk));
-                }
-                toggleColor();
+        if (p2p > KNOCK_P2P_THRESHOLD && now - lastKnockTime > KNOCK_COOLDOWN_MS) {
+            lastKnockTime = now;
+            if (recording) {
+                logRow(String.format(Locale.US, "KNOCK,,,,,%.4f,%.4f,%.4f", dev, jerk, p2p));
             }
+            toggleColor();
         }
     }
 
@@ -230,9 +236,9 @@ public class MainActivity extends Activity implements SensorEventListener {
     private void startRecording() {
         logBuffer = new StringBuilder();
         // Formato: t_ms,type,v1..v7  (v* segun el tipo de fila)
-        logBuffer.append("# ACC   v1=x v2=y v3=z v4=rawMag v5=linearMag(viejo) v6=dev v7=jerk\n");
+        logBuffer.append("# ACC   v1=x v2=y v3=z v4=rawMag v5=dev v6=jerk v7=p2p\n");
         logBuffer.append("# TOUCH v1=action v2=x_px v3=y_px\n");
-        logBuffer.append("# KNOCK v6=dev v7=jerk  (detector por jerk, umbral=").append(KNOCK_JERK_THRESHOLD).append(")\n");
+        logBuffer.append("# KNOCK v5=dev v6=jerk v7=p2p  (detector por p2p, umbral=").append(KNOCK_P2P_THRESHOLD).append(")\n");
         logBuffer.append("# COLOR v1=RED|BLUE\n");
         logBuffer.append("t_ms,type,v1,v2,v3,v4,v5,v6,v7\n");
         recordStartRealtime = SystemClock.elapsedRealtime();
