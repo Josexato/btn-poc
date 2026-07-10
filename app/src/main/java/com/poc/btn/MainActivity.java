@@ -105,11 +105,15 @@ public class MainActivity extends Activity implements SensorEventListener {
     //  3 golpes (2 rápidos + 1 lento) -> Reina
     //  4 golpes            -> Caballo
     // Una ráfaga se cierra cuando pasan BURST_GAP_MS sin nuevos golpes.
-    private static final long BURST_GAP_MS = 1200L;
+    // Calibrado: gaps dentro de una pieza llegan a ~700ms (Reina lenta), y entre
+    // piezas se pausa ~950ms+, así que 900ms separa piezas seguidas sin partir
+    // una Reina.
+    private static final long BURST_GAP_MS = 900L;
     // Para la Reina: los 2 primeros golpes van "rápidos" (gap corto) y el 3º
-    // "lento" (gap claramente mayor).
+    // "lento". En los datos el ritmo separa limpio: Alfil ratio ~1.0-1.2,
+    // Reina ~1.7-3.5, así que 1.5 cae en medio del hueco.
     private static final long QUEEN_FAST_GAP_MS = 450L;
-    private static final float QUEEN_SLOW_RATIO = 1.8f;
+    private static final float QUEEN_SLOW_RATIO = 1.5f;
 
     private TextView pieceView;
     private final long[] burstTimes = new long[16];
