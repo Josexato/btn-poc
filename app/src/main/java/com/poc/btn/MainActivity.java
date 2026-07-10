@@ -49,6 +49,12 @@ public class MainActivity extends Activity implements SensorEventListener {
     // Factor del EWMA que estima el nivel de movimiento reciente (memoria ~300ms).
     private static final float MOTION_DECAY = 0.985f;
 
+    // Tope de la aportación de cada muestra al EWMA de movimiento. Un golpe
+    // fuerte (jerk enorme) es un impulso instantáneo, NO movimiento de fondo;
+    // sin este tope, una ráfaga de golpes en una mesa dura infla el medidor y
+    // bloquea los golpes siguientes. Girar (jerk moderado y sostenido) sí acumula.
+    private static final float MOTION_CAP = 0.5f;
+
     // Tiempo mínimo entre golpes detectados para evitar rebotes (ms).
     private static final long KNOCK_COOLDOWN_MS = 300L;
 
@@ -208,7 +214,8 @@ public class MainActivity extends Activity implements SensorEventListener {
         // Nivel de movimiento reciente ANTES de incorporar esta muestra
         // (para saber si el teléfono estaba en reposo justo antes del impulso).
         final float motionBefore = motionEwma;
-        motionEwma = MOTION_DECAY * motionEwma + (1 - MOTION_DECAY) * jerk;
+        final float motionSample = Math.min(jerk, MOTION_CAP);
+        motionEwma = MOTION_DECAY * motionEwma + (1 - MOTION_DECAY) * motionSample;
 
         // Loguea cada muestra del acelerómetro (lo que "siente").
         if (recording) {
