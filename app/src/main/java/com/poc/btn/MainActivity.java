@@ -107,9 +107,10 @@ public class MainActivity extends Activity implements SensorEventListener {
     // corto de la ráfaga) y cada hueco se cuenta como 1 ó 2 beats. El 1er golpe
     // es el beat 1. Sin metrónomo. AUX1 (10101) no se usa, por eso no hay
     // ambigüedad "3 rápidos vs 3 lentos".
-    // Un símbolo se cierra tras SYMBOL_END_MS sin golpes (mayor que un hueco de
-    // 2 beats, para no partir el símbolo).
-    private static final long SYMBOL_END_MS = 1400L;
+    // Un símbolo se cierra tras SYMBOL_END_MS sin golpes. Debe ser mayor que un
+    // hueco interno de 2 beats (~700ms) y menor que la pausa entre símbolos
+    // (~1s), para poder enviar la jugada completa de corrido.
+    private static final long SYMBOL_END_MS = 900L;
     // Un hueco cuenta como 2 beats si es >= LONG_BEAT_RATIO * beat base.
     private static final double LONG_BEAT_RATIO = 1.5;
 
@@ -505,7 +506,7 @@ public class MainActivity extends Activity implements SensorEventListener {
         if (number == 10) {
             captureFlag = true;
             lastPiece = "captura (x)";
-            speak("por");
+            // No se anuncia por voz: la jugada completa se dice al final.
             if (recording) logRow("SYM,X,10," + codeStr + ",captura,,,,");
             updatePieceView();
             updateStatus();
@@ -523,7 +524,7 @@ public class MainActivity extends Activity implements SensorEventListener {
         }
         moveParts[movePos] = name;
         movePos++;
-        speak(name);
+        // No se anuncia cada símbolo; solo la jugada completa al final.
         if (recording) {
             logRow("SYM," + name + "," + number + "," + codeStr + ",pos" + (movePos - 1) + ",,,,");
         }
