@@ -125,6 +125,7 @@ public class MainActivity extends Activity implements SensorEventListener {
     // Símbolos acumulados del movimiento en curso.
     private final String[] moveParts = new String[MOVE_LEN];
     private int movePos = 0;
+    private boolean captureFlag = false;   // X (captura) activa en la jugada
 
     // Voz: dice el nombre de la pieza (útil con el teléfono boca abajo).
     private TextToSpeech tts;
@@ -284,6 +285,7 @@ public class MainActivity extends Activity implements SensorEventListener {
         }
         burstLen = 0;
         movePos = 0;
+        captureFlag = false;
     }
 
     @Override
@@ -408,9 +410,27 @@ public class MainActivity extends Activity implements SensorEventListener {
             updateStatus();
             return;
         }
+        // 6+ golpes (un "redoble") = borrar/reiniciar la jugada en curso.
+        if (n >= 6) {
+            resetMove(true);
+            return;
+        }
         String code = decodeCode(burstTimes, n);
         int number = codeToNumber(code);
         handleSymbol(number, code, n);
+    }
+
+    private void resetMove(boolean announce) {
+        movePos = 0;
+        captureFlag = false;
+        for (int i = 0; i < MOVE_LEN; i++) moveParts[i] = null;
+        if (announce) {
+            lastPiece = "— (borrado)";
+            speak("borrado");
+            if (recording) logRow("RESET,,,,,,,,");
+        }
+        updatePieceView();
+        updateStatus();
     }
 
     // Reconstruye el código de 5 bits a partir de los tiempos de golpe.
@@ -479,6 +499,19 @@ public class MainActivity extends Activity implements SensorEventListener {
 
     private void handleSymbol(int number, String code, int n) {
         String codeStr = (code == null ? "-----" : code);
+
+        // X (captura): 5 golpes = 11111 (número 10). Marca la jugada como
+        // captura ("por") sin consumir una posición.
+        if (number == 10) {
+            captureFlag = true;
+            lastPiece = "captura (x)";
+            speak("por");
+            if (recording) logRow("SYM,X,10," + codeStr + ",captura,,,,");
+            updatePieceView();
+            updateStatus();
+            return;
+        }
+
         String name = interpretSymbol(number, movePos);
         if (name == null) {
             lastPiece = "no reconocido (" + n + " golpes, " + codeStr + ")";
@@ -495,13 +528,16 @@ public class MainActivity extends Activity implements SensorEventListener {
             logRow("SYM," + name + "," + number + "," + codeStr + ",pos" + (movePos - 1) + ",,,,");
         }
         if (movePos >= MOVE_LEN) {
-            String move = moveParts[0] + " " + moveParts[1] + " " + moveParts[2];
+            String sep = captureFlag ? " por " : " ";
+            String move = moveParts[0] + sep + moveParts[1] + " " + moveParts[2];
             lastPiece = move;
             speak(move);
             if (recording) {
-                logRow("MOVE," + moveParts[0] + "," + moveParts[1] + "," + moveParts[2] + ",,,,,");
+                logRow("MOVE," + moveParts[0] + "," + moveParts[1] + "," + moveParts[2]
+                        + "," + (captureFlag ? "x" : "") + ",,,,");
             }
             movePos = 0;
+            captureFlag = false;
         }
         updatePieceView();
         updateStatus();
@@ -536,13 +572,19 @@ public class MainActivity extends Activity implements SensorEventListener {
                 + "         E=5 F=6 G=7 H=8\n"
                 + "Fila:    1 … 8\n"
                 + "\n"
-                + "Ej.: Caballo E 3  →  8 · 5 · 3";
+                + "ESPECIALES:\n"
+                + "X (comer): 5 golpes  ● ● ● ● ●\n"
+                + "Borrar:    6+ golpes (redoble)\n"
+                + "\n"
+                + "Ej.: Caballo E 3   →  8 · 5 · 3\n"
+                + "Ej.: Caballo x E 3 →  8 · X · 5 · 3";
     }
 
     private void updatePieceView() {
         StringBuilder sb = new StringBuilder("Jugada: ");
         for (int i = 0; i < MOVE_LEN; i++) {
             sb.append(i < movePos && moveParts[i] != null ? moveParts[i] : "·");
+            if (i == 0 && captureFlag) sb.append(" x");
             if (i < MOVE_LEN - 1) sb.append(" · ");
         }
         sb.append("\nÚltimo: ").append(lastPiece);
@@ -609,8 +651,9 @@ public class MainActivity extends Activity implements SensorEventListener {
                 .append(" & motion<").append(KNOCK_MOTION_THRESHOLD).append(")\n");
         logBuffer.append("# COLOR v1=RED|BLUE | orient:UP/DOWN/EDGE | audio=pico sonido 0..1")
                 .append(withAudio ? "" : " (micrófono NO disponible)").append("\n");
-        logBuffer.append("# SYM   v1=símbolo v2=número v3=código5bits v4=posición\n");
-        logBuffer.append("# MOVE  v1=pieza v2=columna v3=fila\n");
+        logBuffer.append("# SYM   v1=símbolo v2=número v3=código5bits v4=posición (X=captura)\n");
+        logBuffer.append("# MOVE  v1=pieza v2=columna v3=fila v4=x(captura)\n");
+        logBuffer.append("# RESET (6+ golpes) borra la jugada en curso\n");
         logBuffer.append("t_ms,type,v1,v2,v3,v4,v5,v6,v7,v8,v9\n");
         recordStartRealtime = SystemClock.elapsedRealtime();
         recording = true;
