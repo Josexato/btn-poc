@@ -5,6 +5,7 @@ import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.graphics.Typeface;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
@@ -25,6 +26,7 @@ import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -208,11 +210,30 @@ public class MainActivity extends Activity implements SensorEventListener {
             }
         });
 
+        // Chuleta de códigos en la pantalla inicial.
+        TextView codesView = new TextView(this);
+        codesView.setTypeface(Typeface.MONOSPACE);
+        codesView.setTextSize(13f);
+        LinearLayout.LayoutParams codesParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        codesParams.topMargin = 48;
+        codesView.setLayoutParams(codesParams);
+        codesView.setText(buildCodesText());
+
         root.addView(statusView);
         root.addView(pieceView);
         root.addView(colorButton);
         root.addView(recordButton);
-        setContentView(root);
+        root.addView(codesView);
+
+        // Envolvemos en un ScrollView para que quepa la chuleta.
+        ScrollView scroll = new ScrollView(this);
+        scroll.setPadding(24, 24, 24, 24);
+        scroll.addView(root, new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        setContentView(scroll);
 
         sensorManager = (SensorManager) getSystemService(SENSOR_SERVICE);
         if (sensorManager != null) {
@@ -488,6 +509,34 @@ public class MainActivity extends Activity implements SensorEventListener {
 
     private void updateStatus() {
         statusView.setText("Orientación: " + orientation + "   Golpes: " + burstLen);
+    }
+
+    // Texto de referencia con la definición de cada código.
+    private String buildCodesText() {
+        return "CÓDIGOS  (● golpe  · silencio)\n"
+                + "El 1er golpe marca el inicio; un\n"
+                + "hueco doble = un beat en silencio.\n"
+                + "\n"
+                + "Nº   patrón (5 beats)\n"
+                + "1    ● · ● ● ·\n"
+                + "2    ● · ● ● ●\n"
+                + "3    ● ● · · ·\n"
+                + "4    ● ● · ● ·\n"
+                + "5    ● ● · ● ●\n"
+                + "6    ● ● ● · ·\n"
+                + "7    ● ● ● · ●\n"
+                + "8    ● ● ● ● ·\n"
+                + "\n"
+                + "MENSAJE:  Pieza · Columna · Fila\n"
+                + "(pausa entre cada símbolo)\n"
+                + "\n"
+                + "Pieza:   Rey=1  Peón=2  Torre=3\n"
+                + "         Dama=4  Alfil=6  Caballo=8\n"
+                + "Columna: A=1 B=2 C=3 D=4\n"
+                + "         E=5 F=6 G=7 H=8\n"
+                + "Fila:    1 … 8\n"
+                + "\n"
+                + "Ej.: Caballo E 3  →  8 · 5 · 3";
     }
 
     private void updatePieceView() {

@@ -6,7 +6,9 @@
 
     <application
         android:allowBackup="true"
-        android:label="btn-poc"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="Ajedrez por Golpes"
         android:theme="@android:style/Theme.Material.Light">
 
         <activity
