@@ -421,8 +421,8 @@ public class MainActivity extends Activity implements SensorEventListener {
         switch (code) {
             case "00000": return 0;
             case "10110": return 1;
-            case "11000": return 2;
-            case "10111": return 3;
+            case "10111": return 2;   // 1,2,3 = 22,23,24 en decimal (consecutivos)
+            case "11000": return 3;
             case "11010": return 4;
             case "11011": return 5;
             case "11100": return 6;
