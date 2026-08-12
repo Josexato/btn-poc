@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RevPDF — OCR de PDFs en tu navegador</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📄</text></svg>">
+<style>
+  :root {
+    --bg: #f6f7fb;
+    --surface: #ffffff;
+    --text: #1c2333;
+    --muted: #5c6578;
+    --border: #dde1ea;
+    --accent: #2f5fe0;
+    --accent-hover: #244dbb;
+    --accent-soft: #e8eefc;
+    --ok: #1d8a4e;
+    --warn: #b3721a;
+    --err: #c0392b;
+    --radius: 12px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151c;
+      --surface: #1b2029;
+      --text: #e8ebf2;
+      --muted: #9aa3b5;
+      --border: #2c3342;
+      --accent: #6b93f5;
+      --accent-hover: #86a7f7;
+      --accent-soft: #223051;
+      --ok: #4fc084;
+      --warn: #d9a05b;
+      --err: #e07060;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 24px 16px 64px; }
+  header { text-align: center; margin: 24px 0 32px; }
+  header h1 { margin: 0 0 8px; font-size: 1.9rem; }
+  header p { margin: 0; color: var(--muted); }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  /* Dropzone */
+  #dropzone {
+    border: 2px dashed var(--border);
+    border-radius: var(--radius);
+    padding: 48px 24px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  #dropzone:hover, #dropzone.dragover {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+  #dropzone .icon { font-size: 2.4rem; display: block; margin-bottom: 8px; }
+  #dropzone strong { color: var(--accent); }
+  #dropzone p { margin: 4px 0; color: var(--muted); }
+  #fileInput { display: none; }
+  /* Options */
+  .options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    align-items: center;
+    margin-top: 16px;
+  }
+  .options label { font-size: .9rem; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+  select {
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: .9rem;
+  }
+  /* Buttons */
+  button {
+    font: inherit;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 18px;
+    cursor: pointer;
+    background: var(--accent);
+    color: #fff;
+    transition: background .15s;
+  }
+  button:hover:not(:disabled) { background: var(--accent-hover); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.secondary {
+    background: transparent;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+  }
+  button.secondary:hover:not(:disabled) { background: var(--accent-soft); }
+  .btn-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+  /* Progress */
+  #progressCard { display: none; }
+  .progress-bar {
+    height: 10px;
+    background: var(--border);
+    border-radius: 5px;
+    overflow: hidden;
+    margin: 10px 0;
+  }
+  .progress-bar > div {
+    height: 100%;
+    width: 0%;
+    background: var(--accent);
+    border-radius: 5px;
+    transition: width .2s;
+  }
+  #statusText { color: var(--muted); font-size: .9rem; }
+  /* Results */
+  #resultsCard { display: none; }
+  .page-result { margin-bottom: 20px; }
+  .page-result h3 {
+    margin: 0 0 6px;
+    font-size: .95rem;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .badge {
+    font-size: .72rem;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 999px;
+    text-transform: uppercase;
+    letter-spacing: .03em;
+  }
+  .badge.ocr { background: var(--accent-soft); color: var(--accent); }
+  .badge.embedded { background: color-mix(in srgb, var(--ok) 15%, transparent); color: var(--ok); }
+  .badge.empty { background: color-mix(in srgb, var(--warn) 15%, transparent); color: var(--warn); }
+  .page-result textarea {
+    width: 100%;
+    min-height: 110px;
+    resize: vertical;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: .85rem;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px;
+  }
+  .error-msg { color: var(--err); font-size: .9rem; margin-top: 8px; }
+  footer { text-align: center; color: var(--muted); font-size: .82rem; margin-top: 40px; }
+  footer a { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>📄 RevPDF</h1>
+    <p>Extrae el texto de tus PDFs escaneados con OCR — todo ocurre en tu navegador, ningún archivo sale de tu equipo.</p>
+  </header>
+
+  <div class="card">
+    <div id="dropzone" role="button" tabindex="0" aria-label="Seleccionar archivo PDF">
+      <span class="icon">📥</span>
+      <p><strong>Haz clic para elegir un PDF</strong> o arrástralo aquí</p>
+      <p id="fileName">Ningún archivo seleccionado</p>
+    </div>
+    <input type="file" id="fileInput" accept="application/pdf,.pdf">
+
+    <div class="options">
+      <label>Idioma del OCR
+        <select id="langSelect">
+          <option value="spa" selected>Español</option>
+          <option value="eng">Inglés</option>
+          <option value="spa+eng">Español + Inglés</option>
+          <option value="por">Portugués</option>
+          <option value="fra">Francés</option>
+        </select>
+      </label>
+      <label>Calidad
+        <select id="scaleSelect">
+          <option value="1.5">Rápida</option>
+          <option value="2" selected>Normal</option>
+          <option value="3">Alta (más lenta)</option>
+        </select>
+      </label>
+      <label>
+        <input type="checkbox" id="forceOcr">
+        Forzar OCR aunque el PDF ya tenga texto
+      </label>
+    </div>
+
+    <div class="btn-row">
+      <button id="processBtn" disabled>Procesar PDF</button>
+      <button id="cancelBtn" class="secondary" style="display:none">Cancelar</button>
+    </div>
+    <div id="errorMsg" class="error-msg"></div>
+  </div>
+
+  <div class="card" id="progressCard">
+    <strong id="progressTitle">Procesando…</strong>
+    <div class="progress-bar"><div id="progressFill"></div></div>
+    <div id="statusText"></div>
+  </div>
+
+  <div class="card" id="resultsCard">
+    <h2 style="margin-top:0">Resultado</h2>
+    <div class="btn-row" style="margin-bottom:16px">
+      <button id="copyAllBtn" class="secondary">Copiar todo</button>
+      <button id="downloadTxtBtn" class="secondary">Descargar .txt</button>
+    </div>
+    <div id="pagesContainer"></div>
+  </div>
+
+  <footer>
+    Hecho con <a href="https://mozilla.github.io/pdf.js/" target="_blank" rel="noopener">PDF.js</a> y
+    <a href="https://tesseract.projectnaptha.com/" target="_blank" rel="noopener">Tesseract.js</a>.
+    El procesamiento es 100% local: tus documentos nunca se suben a ningún servidor.
+  </footer>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+  // Si una página ya trae al menos este número de caracteres de texto
+  // incrustado, se usa ese texto y se omite el OCR (salvo "Forzar OCR").
+  const EMBEDDED_TEXT_THRESHOLD = 50;
+
+  const dropzone = document.getElementById('dropzone');
+  const fileInput = document.getElementById('fileInput');
+  const fileName = document.getElementById('fileName');
+  const processBtn = document.getElementById('processBtn');
+  const cancelBtn = document.getElementById('cancelBtn');
+  const langSelect = document.getElementById('langSelect');
+  const scaleSelect = document.getElementById('scaleSelect');
+  const forceOcr = document.getElementById('forceOcr');
+  const errorMsg = document.getElementById('errorMsg');
+  const progressCard = document.getElementById('progressCard');
+  const progressTitle = document.getElementById('progressTitle');
+  const progressFill = document.getElementById('progressFill');
+  const statusText = document.getElementById('statusText');
+  const resultsCard = document.getElementById('resultsCard');
+  const pagesContainer = document.getElementById('pagesContainer');
+  const copyAllBtn = document.getElementById('copyAllBtn');
+  const downloadTxtBtn = document.getElementById('downloadTxtBtn');
+
+  let selectedFile = null;
+  let cancelled = false;
+  let running = false;
+  let pageTexts = [];
+
+  // --- Selección de archivo ---
+  dropzone.addEventListener('click', () => fileInput.click());
+  dropzone.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); }
+  });
+  fileInput.addEventListener('change', () => setFile(fileInput.files[0]));
+
+  ['dragover', 'dragenter'].forEach((ev) =>
+    dropzone.addEventListener(ev, (e) => { e.preventDefault(); dropzone.classList.add('dragover'); }));
+  ['dragleave', 'drop'].forEach((ev) =>
+    dropzone.addEventListener(ev, (e) => { e.preventDefault(); dropzone.classList.remove('dragover'); }));
+  dropzone.addEventListener('drop', (e) => setFile(e.dataTransfer.files[0]));
+
+  function setFile(file) {
+    errorMsg.textContent = '';
+    if (!file) return;
+    if (file.type !== 'application/pdf' && !/\.pdf$/i.test(file.name)) {
+      errorMsg.textContent = 'El archivo debe ser un PDF.';
+      return;
+    }
+    selectedFile = file;
+    fileName.textContent = `${file.name} (${formatSize(file.size)})`;
+    processBtn.disabled = false;
+  }
+
+  function formatSize(bytes) {
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  // --- Procesamiento ---
+  processBtn.addEventListener('click', async () => {
+    if (!selectedFile || running) return;
+    running = true;
+    cancelled = false;
+    pageTexts = [];
+    errorMsg.textContent = '';
+    pagesContainer.innerHTML = '';
+    resultsCard.style.display = 'none';
+    progressCard.style.display = 'block';
+    processBtn.disabled = true;
+    cancelBtn.style.display = 'inline-block';
+    setProgress(0, 'Cargando PDF…');
+
+    let worker = null;
+    try {
+      const data = new Uint8Array(await selectedFile.arrayBuffer());
+      const pdf = await pdfjsLib.getDocument({ data }).promise;
+      const numPages = pdf.numPages;
+      const scale = parseFloat(scaleSelect.value);
+      const force = forceOcr.checked;
+
+      for (let i = 1; i <= numPages; i++) {
+        if (cancelled) break;
+        const baseProgress = (i - 1) / numPages;
+        setProgress(baseProgress, `Página ${i} de ${numPages}: analizando…`);
+
+        const page = await pdf.getPage(i);
+        let text = '';
+        let source = 'ocr';
+
+        if (!force) {
+          const content = await page.getTextContent();
+          const embedded = content.items.map((it) => it.str).join(' ').trim();
+          if (embedded.length >= EMBEDDED_TEXT_THRESHOLD) {
+            text = embedded;
+            source = 'embedded';
+          }
+        }
+
+        if (source === 'ocr') {
+          if (!worker) {
+            setProgress(baseProgress, 'Descargando modelo de OCR (solo la primera vez)…');
+            worker = await Tesseract.createWorker(langSelect.value, 1, {
+              logger: (m) => {
+                if (m.status === 'recognizing text') {
+                  setProgress(
+                    baseProgress + (m.progress / numPages),
+                    `Página ${i} de ${numPages}: reconociendo texto ${Math.round(m.progress * 100)}%`
+                  );
+                }
+              }
+            });
+          }
+          if (cancelled) break;
+          setProgress(baseProgress, `Página ${i} de ${numPages}: renderizando…`);
+          const viewport = page.getViewport({ scale });
+          const canvas = document.createElement('canvas');
+          canvas.width = viewport.width;
+          canvas.height = viewport.height;
+          await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+
+          if (cancelled) break;
+          const result = await worker.recognize(canvas);
+          text = result.data.text.trim();
+          canvas.width = 0; canvas.height = 0;
+        }
+
+        pageTexts.push({ page: i, text, source });
+        renderPageResult(i, text, source);
+        resultsCard.style.display = 'block';
+        page.cleanup();
+      }
+
+      if (cancelled) {
+        progressTitle.textContent = 'Cancelado';
+        setProgress(pageTexts.length / numPages, `Se procesaron ${pageTexts.length} de ${numPages} páginas antes de cancelar.`);
+      } else {
+        progressTitle.textContent = 'Completado ✔';
+        setProgress(1, `${numPages} página(s) procesada(s).`);
+      }
+    } catch (err) {
+      console.error(err);
+      progressCard.style.display = 'none';
+      errorMsg.textContent = 'Error al procesar el PDF: ' + (err && err.message ? err.message : err);
+    } finally {
+      if (worker) { try { await worker.terminate(); } catch (_) {} }
+      running = false;
+      processBtn.disabled = !selectedFile;
+      cancelBtn.style.display = 'none';
+    }
+  });
+
+  cancelBtn.addEventListener('click', () => { cancelled = true; cancelBtn.disabled = true; setTimeout(() => { cancelBtn.disabled = false; }, 0); });
+
+  function setProgress(fraction, message) {
+    progressFill.style.width = Math.min(100, Math.round(fraction * 100)) + '%';
+    statusText.textContent = message;
+  }
+
+  const SOURCE_LABEL = {
+    ocr: { text: 'OCR', cls: 'ocr' },
+    embedded: { text: 'Texto original', cls: 'embedded' },
+    empty: { text: 'Sin texto', cls: 'empty' }
+  };
+
+  function renderPageResult(pageNum, text, source) {
+    if (!text) source = 'empty';
+    const label = SOURCE_LABEL[source];
+    const div = document.createElement('div');
+    div.className = 'page-result';
+
+    const h3 = document.createElement('h3');
+    h3.textContent = `Página ${pageNum} `;
+    const badge = document.createElement('span');
+    badge.className = 'badge ' + label.cls;
+    badge.textContent = label.text;
+    h3.appendChild(badge);
+
+    const ta = document.createElement('textarea');
+    ta.value = text || '(no se detectó texto en esta página)';
+    ta.readOnly = true;
+
+    div.appendChild(h3);
+    div.appendChild(ta);
+    pagesContainer.appendChild(div);
+  }
+
+  // --- Exportar ---
+  function fullText() {
+    return pageTexts
+      .map((p) => `--- Página ${p.page} ---\n\n${p.text || '(sin texto)'}`)
+      .join('\n\n');
+  }
+
+  copyAllBtn.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(fullText());
+      copyAllBtn.textContent = '¡Copiado!';
+      setTimeout(() => { copyAllBtn.textContent = 'Copiar todo'; }, 1500);
+    } catch (_) {
+      errorMsg.textContent = 'No se pudo copiar al portapapeles.';
+    }
+  });
+
+  downloadTxtBtn.addEventListener('click', () => {
+    const blob = new Blob([fullText()], { type: 'text/plain;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    const base = selectedFile ? selectedFile.name.replace(/\.pdf$/i, '') : 'ocr';
+    a.download = base + '.txt';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+})();
+</script>
+</body>
+</html>
