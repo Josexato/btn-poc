@@ -3,11 +3,11 @@ plugins {
 }
 
 android {
-    namespace 'com.josexato.mirador3d'
+    namespace 'com.josexato.navaja'
     compileSdk 34
 
     defaultConfig {
-        applicationId 'com.josexato.mirador3d'
+        applicationId 'com.josexato.navaja'
         minSdk 24
         targetSdk 34
         versionCode 1

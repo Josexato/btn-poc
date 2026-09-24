@@ -1,4 +1,4 @@
-package com.josexato.mirador3d;
+package com.josexato.navaja;
 
 import android.app.Activity;
 import android.content.Intent;
