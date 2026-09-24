@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Mirador 3D</title>
+<style>
+  :root {
+    --bg: #eef0f3;
+    --surface: #ffffff;
+    --surface-2: #f5f6f8;
+    --text: #1b222c;
+    --muted: #5d6673;
+    --border: #d7dbe1;
+    --accent: #c46a1a;
+    --accent-ink: #ffffff;
+    --canvas-bg: #e3e6ea;
+    --grid-major: #b9bfc7;
+    --grid-minor: #d2d6dc;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #161a20;
+      --surface: #1e232b;
+      --surface-2: #242a33;
+      --text: #e6eaf0;
+      --muted: #97a0ad;
+      --border: #333b46;
+      --accent: #e0913f;
+      --accent-ink: #201503;
+      --canvas-bg: #1a1f26;
+      --grid-major: #3a424d;
+      --grid-minor: #272d36;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #161a20;
+    --surface: #1e232b;
+    --surface-2: #242a33;
+    --text: #e6eaf0;
+    --muted: #97a0ad;
+    --border: #333b46;
+    --accent: #e0913f;
+    --accent-ink: #201503;
+    --canvas-bg: #1a1f26;
+    --grid-major: #3a424d;
+    --grid-minor: #272d36;
+    color-scheme: dark;
+  }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, sans-serif;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  /* Barra superior */
+  header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+  header h1 { font-size: 1rem; font-weight: 600; margin: 0; letter-spacing: .01em; }
+  header h1 span { color: var(--accent); }
+  #fileLabel {
+    font-family: ui-monospace, monospace;
+    font-size: .78rem;
+    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 40vw;
+  }
+  .spacer { flex: 1; }
+  .btn {
+    font: inherit;
+    font-size: .82rem;
+    font-weight: 500;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text);
+    border-radius: 7px;
+    padding: 7px 13px;
+    cursor: pointer;
+  }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  input[type="file"] { display: none; }
+
+  /* Zona 3D */
+  #stage { position: relative; flex: 1; min-height: 0; }
+  #canvasHost { position: absolute; inset: 0; }
+  #canvasHost canvas { display: block; }
+
+  #dropHint {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    padding-bottom: 28px;
+    pointer-events: none;
+    z-index: 5;
+  }
+  #dropHint .box {
+    background: color-mix(in srgb, var(--surface) 88%, transparent);
+    border: 2px dashed var(--accent);
+    border-radius: 12px;
+    padding: 18px 26px;
+    font-size: .9rem;
+    color: var(--muted);
+    text-align: center;
+  }
+  #stage.dragover::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border: 3px dashed var(--accent);
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+    z-index: 6;
+    pointer-events: none;
+  }
+
+  /* Panel de datos de la pieza */
+  #statsPanel {
+    position: absolute;
+    top: 14px;
+    left: 14px;
+    z-index: 4;
+    background: color-mix(in srgb, var(--surface) 92%, transparent);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    min-width: 200px;
+    backdrop-filter: blur(4px);
+  }
+  #statsPanel h2 {
+    margin: 0 0 8px;
+    font-size: .68rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .09em;
+    color: var(--muted);
+  }
+  .stat { display: flex; justify-content: space-between; gap: 16px; font-size: .8rem; padding: 2px 0; }
+  .stat b {
+    font-family: ui-monospace, monospace;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+  }
+  .stat .lbl { color: var(--muted); }
+
+  /* Controles */
+  #controls {
+    position: absolute;
+    right: 14px;
+    top: 14px;
+    z-index: 4;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: color-mix(in srgb, var(--surface) 92%, transparent);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    backdrop-filter: blur(4px);
+  }
+  #controls label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: .8rem;
+    cursor: pointer;
+  }
+  #controls select, #controls input[type="color"] {
+    font: inherit;
+    font-size: .8rem;
+    background: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 3px 6px;
+  }
+  #controls input[type="color"] { padding: 1px 2px; width: 44px; height: 26px; }
+  #controls .btn { padding: 5px 10px; }
+  #errorBar {
+    position: absolute;
+    bottom: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 7;
+    background: #8f2c20;
+    color: #fff;
+    font-size: .82rem;
+    border-radius: 8px;
+    padding: 8px 16px;
+    max-width: min(90%, 480px);
+  }
+  footer {
+    padding: 6px 16px calc(6px + env(safe-area-inset-bottom, 0px));
+    font-size: .72rem;
+    color: var(--muted);
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+  }
+  @media (max-width: 640px) {
+    #statsPanel { top: auto; bottom: 10px; left: 10px; right: 10px; min-width: 0; }
+    .stat { font-size: .74rem; }
+    #controls { padding: 10px; }
+    #fileLabel { display: none; }
+    #dropHint { display: none; }
+  }
+  [hidden] { display: none !important; }
+  img { max-width: 100%; }
+</style>
+
+</head>
+<body>
+<header>
+  <h1>Mirador <span>3D</span></h1>
+  <span id="fileLabel">pieza de ejemplo</span>
+  <span class="spacer"></span>
+  <button class="btn primary" id="openBtn">Abrir STL / OBJ</button>
+  <input type="file" id="fileInput" accept=".stl,.obj">
+</header>
+
+<div id="stage">
+  <div id="canvasHost"></div>
+
+  <div id="statsPanel">
+    <h2>Pieza</h2>
+    <div class="stat"><span class="lbl">Triángulos</span><b id="stTris">—</b></div>
+    <div class="stat"><span class="lbl">Vértices</span><b id="stVerts">—</b></div>
+    <div class="stat"><span class="lbl">Tamaño (mm)</span><b id="stDims">—</b></div>
+    <div class="stat"><span class="lbl">Volumen</span><b id="stVol">—</b></div>
+    <div class="stat"><span class="lbl">Área</span><b id="stArea">—</b></div>
+    <div class="stat"><span class="lbl">Peso est. PLA</span><b id="stWeight">—</b></div>
+  </div>
+
+  <div id="controls">
+    <label>Material
+      <select id="matSelect">
+        <option value="solid" selected>Sólido</option>
+        <option value="normals">Normales</option>
+      </select>
+    </label>
+    <label>Color <input type="color" id="colorPick" value="#9fb0c3"></label>
+    <label><input type="checkbox" id="wireChk"> Malla</label>
+    <label><input type="checkbox" id="gridChk" checked> Rejilla</label>
+    <label><input type="checkbox" id="spinChk"> Rotar</label>
+    <button class="btn" id="resetBtn">Centrar vista</button>
+  </div>
+
+  <div id="dropHint" hidden>
+    <div class="box">Toca <b>Abrir STL / OBJ</b> para cargar tu pieza</div>
+  </div>
+
+  <div id="errorBar" hidden></div>
+</div>
+
+<footer>
+  Unidades asumidas en milímetros (convención STL). Peso estimado con densidad PLA 1,24 g/cm³ al 100% de relleno. Todo se procesa en tu navegador.
+</footer>
+
+<script src="lib/three.min.js"></script>
+<script src="lib/OrbitControls.js"></script>
+<script src="lib/STLLoader.js"></script>
+<script src="lib/OBJLoader.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  const host = document.getElementById('canvasHost');
+  const stage = document.getElementById('stage');
+  const fileInput = document.getElementById('fileInput');
+  const fileLabel = document.getElementById('fileLabel');
+  const errorBar = document.getElementById('errorBar');
+  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  function cssVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  // --- Escena ---
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 10000);
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  host.appendChild(renderer.domElement);
+
+  const controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x556066, 0.9));
+  const dirLight = new THREE.DirectionalLight(0xffffff, 0.7);
+  dirLight.position.set(1, 2, 1.5);
+  scene.add(dirLight);
+  const dirLight2 = new THREE.DirectionalLight(0xffffff, 0.25);
+  dirLight2.position.set(-1.5, -1, -1);
+  scene.add(dirLight2);
+
+  let grid = null;
+  let modelGroup = null;   // grupo centrado que contiene la pieza
+  let meshes = [];         // mallas de la pieza
+  let wireGroup = null;    // overlay de alambre
+  let modelRadius = 50;
+
+  const solidMaterial = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(document.getElementById('colorPick').value),
+    metalness: 0.1,
+    roughness: 0.65,
+    side: THREE.DoubleSide
+  });
+  const normalsMaterial = new THREE.MeshNormalMaterial({ side: THREE.DoubleSide });
+
+  function applyTheme() {
+    scene.background = new THREE.Color(cssVar('--canvas-bg'));
+    rebuildGrid();
+  }
+  function rebuildGrid() {
+    if (grid) { scene.remove(grid); grid.geometry.dispose(); grid.material.dispose(); grid = null; }
+    const size = Math.max(10, Math.ceil((modelRadius * 2.5) / 10) * 10);
+    grid = new THREE.GridHelper(size, 20, new THREE.Color(cssVar('--grid-major')), new THREE.Color(cssVar('--grid-minor')));
+    grid.visible = document.getElementById('gridChk').checked;
+    if (modelGroup) grid.position.y = modelGroup.userData.floorY || 0;
+    scene.add(grid);
+  }
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
+  new MutationObserver(applyTheme).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+  function resize() {
+    const w = host.clientWidth, h = host.clientHeight;
+    if (!w || !h) return;
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+    renderer.setSize(w, h);
+  }
+  new ResizeObserver(resize).observe(host);
+
+  renderer.setAnimationLoop(() => {
+    if (modelGroup && document.getElementById('spinChk').checked) modelGroup.rotation.y += 0.006;
+    controls.update();
+    renderer.render(scene, camera);
+  });
+
+  // --- Métricas de la pieza ---
+  function computeStats() {
+    let tris = 0, verts = 0, volume = 0, area = 0;
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+    const ab = new THREE.Vector3(), ac = new THREE.Vector3(), cr = new THREE.Vector3();
+    for (const mesh of meshes) {
+      const geo = mesh.geometry;
+      const pos = geo.attributes.position;
+      if (!pos) continue;
+      verts += pos.count;
+      const idx = geo.index;
+      const triCount = idx ? idx.count / 3 : pos.count / 3;
+      tris += triCount;
+      for (let i = 0; i < triCount; i++) {
+        if (idx) {
+          a.fromBufferAttribute(pos, idx.getX(i * 3));
+          b.fromBufferAttribute(pos, idx.getX(i * 3 + 1));
+          c.fromBufferAttribute(pos, idx.getX(i * 3 + 2));
+        } else {
+          a.fromBufferAttribute(pos, i * 3);
+          b.fromBufferAttribute(pos, i * 3 + 1);
+          c.fromBufferAttribute(pos, i * 3 + 2);
+        }
+        volume += a.dot(cr.crossVectors(b, c)) / 6;
+        area += ab.subVectors(b, a).cross(ac.subVectors(c, a)).length() / 2;
+      }
+    }
+    return { tris, verts, volume: Math.abs(volume), area };
+  }
+
+  const fmt = new Intl.NumberFormat('es', { maximumFractionDigits: 1 });
+  const fmtInt = new Intl.NumberFormat('es');
+  function updateStatsUI(size) {
+    const s = computeStats();
+    document.getElementById('stTris').textContent = fmtInt.format(s.tris);
+    document.getElementById('stVerts').textContent = fmtInt.format(s.verts);
+    document.getElementById('stDims').textContent =
+      `${fmt.format(size.x)} × ${fmt.format(size.y)} × ${fmt.format(size.z)}`;
+    const cm3 = s.volume / 1000;
+    document.getElementById('stVol').textContent = cm3 >= 0.05 ? fmt.format(cm3) + ' cm³' : '< 0,1 cm³';
+    document.getElementById('stArea').textContent = fmt.format(s.area / 100) + ' cm²';
+    document.getElementById('stWeight').textContent = fmt.format(cm3 * 1.24) + ' g';
+  }
+
+  // --- Montaje de un modelo (BufferGeometry de STL o Group de OBJ) ---
+  function setModel(object3d, label) {
+    if (modelGroup) {
+      scene.remove(modelGroup);
+      modelGroup.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
+    }
+    meshes = [];
+    wireGroup = null;
+
+    modelGroup = new THREE.Group();
+    let payload;
+    if (object3d.isBufferGeometry) {
+      object3d.computeVertexNormals();
+      payload = new THREE.Mesh(object3d, currentMaterial());
+    } else {
+      payload = object3d;
+      payload.traverse((o) => { if (o.isMesh) { o.material = currentMaterial(); if (!o.geometry.attributes.normal) o.geometry.computeVertexNormals(); } });
+    }
+    modelGroup.add(payload);
+    payload.traverse ? payload.traverse((o) => { if (o.isMesh) meshes.push(o); }) : null;
+    if (payload.isMesh) meshes = [payload];
+
+    // Centrar en el origen, apoyar sobre la rejilla
+    const box = new THREE.Box3().setFromObject(payload);
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    payload.position.sub(center);
+    modelGroup.userData.floorY = -size.y / 2;
+    modelRadius = Math.max(size.x, size.y, size.z) / 2 || 50;
+    scene.add(modelGroup);
+
+    buildWireframe();
+    rebuildGrid();
+    fitCamera(size);
+    updateStatsUI(size);
+    fileLabel.textContent = label;
+  }
+
+  function fitCamera(size) {
+    const maxDim = Math.max(size.x, size.y, size.z) || 100;
+    const dist = maxDim / (2 * Math.tan((camera.fov * Math.PI) / 360)) * 1.6;
+    camera.near = Math.max(dist / 1000, 0.01);
+    camera.far = dist * 100;
+    camera.position.set(dist * 0.7, dist * 0.55, dist * 0.8);
+    camera.updateProjectionMatrix();
+    controls.target.set(0, 0, 0);
+    controls.update();
+  }
+
+  function currentMaterial() {
+    return document.getElementById('matSelect').value === 'normals' ? normalsMaterial : solidMaterial;
+  }
+  function applyMaterial() {
+    for (const m of meshes) m.material = currentMaterial();
+  }
+  function buildWireframe() {
+    if (wireGroup && wireGroup.parent) wireGroup.parent.remove(wireGroup);
+    wireGroup = new THREE.Group();
+    for (const m of meshes) {
+      const wf = new THREE.LineSegments(
+        new THREE.WireframeGeometry(m.geometry),
+        new THREE.LineBasicMaterial({ color: new THREE.Color(cssVar('--accent')), transparent: true, opacity: 0.45 })
+      );
+      wf.position.copy(m.position);
+      wf.rotation.copy(m.rotation);
+      wf.scale.copy(m.scale);
+      m.parent.add(wf);
+      wireGroup.children.push(wf);
+      wf.visible = document.getElementById('wireChk').checked;
+    }
+  }
+
+  // --- Carga de archivos ---
+  function showError(msg) {
+    errorBar.textContent = msg;
+    errorBar.hidden = false;
+    setTimeout(() => { errorBar.hidden = true; }, 6000);
+  }
+
+  function loadFile(file) {
+    const name = file.name;
+    const ext = (name.split('.').pop() || '').toLowerCase();
+    const reader = new FileReader();
+    reader.onerror = () => showError('No se pudo leer el archivo.');
+    if (ext === 'stl') {
+      reader.onload = () => {
+        try {
+          const geo = new THREE.STLLoader().parse(reader.result);
+          setModel(geo, name);
+          document.getElementById('dropHint').hidden = true;
+        } catch (e) { showError('STL no válido: ' + e.message); }
+      };
+      reader.readAsArrayBuffer(file);
+    } else if (ext === 'obj') {
+      reader.onload = () => {
+        try {
+          const group = new THREE.OBJLoader().parse(reader.result);
+          let hasMesh = false;
+          group.traverse((o) => { if (o.isMesh) hasMesh = true; });
+          if (!hasMesh) throw new Error('el archivo no contiene geometría');
+          setModel(group, name);
+          document.getElementById('dropHint').hidden = true;
+        } catch (e) { showError('OBJ no válido: ' + e.message); }
+      };
+      reader.readAsText(file);
+    } else {
+      showError('Formato no soportado. Usa un archivo .stl o .obj.');
+    }
+  }
+
+  document.getElementById('openBtn').addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', () => { if (fileInput.files[0]) loadFile(fileInput.files[0]); });
+
+  let dragDepth = 0;
+  stage.addEventListener('dragenter', (e) => { e.preventDefault(); dragDepth++; stage.classList.add('dragover'); });
+  stage.addEventListener('dragover', (e) => e.preventDefault());
+  stage.addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; stage.classList.remove('dragover'); } });
+  stage.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dragDepth = 0;
+    stage.classList.remove('dragover');
+    if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]);
+  });
+
+  // --- Controles ---
+  document.getElementById('matSelect').addEventListener('change', applyMaterial);
+  document.getElementById('colorPick').addEventListener('input', (e) => {
+    solidMaterial.color.set(e.target.value);
+  });
+  document.getElementById('wireChk').addEventListener('change', (e) => {
+    if (wireGroup) wireGroup.children.forEach((w) => { w.visible = e.target.checked; });
+  });
+  document.getElementById('gridChk').addEventListener('change', (e) => { if (grid) grid.visible = e.target.checked; });
+  document.getElementById('resetBtn').addEventListener('click', () => {
+    if (!modelGroup) return;
+    modelGroup.rotation.set(0, 0, 0);
+    const box = new THREE.Box3().setFromObject(modelGroup);
+    fitCamera(box.getSize(new THREE.Vector3()));
+  });
+  if (reducedMotion) document.getElementById('spinChk').checked = false;
+
+  // --- Pieza de ejemplo: brida con 4 perforaciones, hecha por CSG simple no,
+  //     mejor: nudo toroidal escalado a tamaño imprimible (~60 mm) ---
+  function sampleModel() {
+    const geo = new THREE.TorusKnotGeometry(20, 6, 220, 36);
+    geo.rotateX(-Math.PI / 2);
+    return geo.toNonIndexed();
+  }
+
+  applyTheme();
+  resize();
+  setModel(sampleModel(), 'pieza de ejemplo — nudo toroidal (60 mm)');
+  document.getElementById('dropHint').hidden = false;
+})();
+</script>
+</body>
+</html>

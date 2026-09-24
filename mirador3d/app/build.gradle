@@ -1,0 +1,30 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.josexato.mirador3d'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.josexato.mirador3d'
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName '1.0'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            // Firmado con la keystore debug que AGP genera sola, para que el
+            // APK del CI sea instalable sin configurar firmas propias.
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
