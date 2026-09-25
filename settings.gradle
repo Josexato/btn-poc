@@ -15,4 +15,3 @@ dependencyResolutionManagement {
 
 rootProject.name = "btn-poc"
 include ":app"
-include ":scan3d"
